@@ -393,19 +393,27 @@ class ConfidenceStringMatcher:
         interval = 1.0
         densified_geom = geom_curr.densifyByDistance(interval)
         
+        # Use boundary for distance calculation if it's a polygon to handle 'inside' cases
+        comparison_geom = geom_cad
+        if geom_cad.type() == QgsWkbTypes.PolygonGeometry:
+            comparison_geom = geom_cad.boundary()
+            
         sample_vectors = []
         distances = []
         
         for v in densified_geom.vertices():
             pt = QgsPointXY(v.x(), v.y())
             pt_geom = QgsGeometry.fromPointXY(pt)
-            nearest_res = geom_cad.nearestPoint(pt_geom)
+            
+            # Find closest point on the line/boundary
+            nearest_res = comparison_geom.nearestPoint(pt_geom)
             if not nearest_res.isEmpty():
                 dist = pt_geom.distance(nearest_res)
                 distances.append(dist)
-                if dist > 0.05:
-                    vec = QgsGeometry.fromPolylineXY([pt, nearest_res.asPoint()])
-                    sample_vectors.append(vec)
+                
+                # Create vector for visualization
+                vec = QgsGeometry.fromPolylineXY([pt, nearest_res.asPoint()])
+                sample_vectors.append(vec)
         
         if distances:
             avg_dist = sum(distances) / len(distances)
@@ -414,10 +422,12 @@ class ConfidenceStringMatcher:
             avg_dist = h_dist
             max_dist = h_dist
 
-        if sample_vectors:
+        if sample_vectors and len(sample_vectors) == len(distances):
             # Store all vectors as a MultiLineString for visualization
             result["error_vectors"] = QgsGeometry.fromMultiPolylineXY([v.asPolyline() for v in sample_vectors])
-            result["error_line"] = sample_vectors[distances.index(max(distances))] if distances else None
+            # Correctly map max distance to its specific vector
+            max_idx = distances.index(max_dist)
+            result["error_line"] = sample_vectors[max_idx]
         
         result["score"] = avg_dist
         
