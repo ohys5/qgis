@@ -348,6 +348,16 @@ class ConfidenceStringMatcher:
     def __init__(self, sigma=0.1):
         self.sigma = sigma
 
+    def _get_bearing(self, p1, p2):
+        """Calculates the bearing (0-180) between two points."""
+        angle = math.degrees(math.atan2(p2.y() - p1.y(), p2.x() - p1.x()))
+        return angle % 180
+
+    def _angle_diff(self, a1, a2):
+        """Calculates the minimum difference between two bearings (0-180)."""
+        diff = abs(a1 - a2) % 180
+        return min(diff, 180 - diff)
+
     def process_pair(self, cur_feat, cad_feat, mode="simple", transform=None, tolerance=0.1):
         geom_curr = cur_feat.geometry()
         geom_cad = cad_feat.geometry()
@@ -406,33 +416,65 @@ class ConfidenceStringMatcher:
         else:
             comparison_lines.append(geom_cad)
             
+        # Prepare comparison segments and their angles
+        cad_segments = []
+        for line_geom in comparison_lines:
+            # Extract vertices to build segments
+            pts = [v for v in line_geom.vertices()]
+            for j in range(len(pts) - 1):
+                seg = QgsGeometry.fromPolylineXY([pts[j], pts[j+1]])
+                angle = self._get_bearing(pts[j], pts[j+1])
+                cad_segments.append((seg, angle))
+            
         sample_vectors = []
         distances = []
         
-        for v in densified_geom.vertices():
-            pt = QgsPointXY(v.x(), v.y())
+        survey_vertices = [v for v in densified_geom.vertices()]
+        for i in range(len(survey_vertices)):
+            pt = QgsPointXY(survey_vertices[i].x(), survey_vertices[i].y())
             pt_geom = QgsGeometry.fromPointXY(pt)
             
-            # Find closest point across ALL rings/lines
+            # 1. Determine local survey orientation
+            if i < len(survey_vertices) - 1:
+                s_angle = self._get_bearing(survey_vertices[i], survey_vertices[i+1])
+            elif i > 0:
+                s_angle = self._get_bearing(survey_vertices[i-1], survey_vertices[i])
+            else:
+                s_angle = 0 # Point geometry fallback (safety)
+
+            # 2. Find best matching segment (nearest + aligned)
             best_pt = None
             min_d = float('inf')
             
-            # REQ-2026-02-06-FILT: Prevention of 'jumping' points
-            # We only care about points within a reasonable vicinity (e.g., 10m)
+            angle_tolerance = 25.0 # Allow 25 degree deviation
             outlier_limit = 10.0 
             
-            for line in comparison_lines:
-                nr = line.nearestPoint(pt_geom)
-                if not nr.isEmpty():
-                    d = pt_geom.distance(nr)
-                    if d < min_d:
-                        min_d = d
-                        best_pt = nr.asPoint()
+            # First pass: Look for aligned segments
+            for seg_geom, seg_angle in cad_segments:
+                if self._angle_diff(s_angle, seg_angle) < angle_tolerance:
+                    nr = seg_geom.nearestPoint(pt_geom)
+                    if not nr.isEmpty():
+                        d = pt_geom.distance(nr)
+                        if d < min_d:
+                            min_d = d
+                            best_pt = nr.asPoint()
             
+            # Second pass fallback: If no aligned segment nearby, try absolute nearest but strictly
+            # (Matches user's suggestion to 'track' nearby lines by angle)
+            if not best_pt:
+                for seg_geom, seg_angle in cad_segments:
+                    nr = seg_geom.nearestPoint(pt_geom)
+                    if not nr.isEmpty():
+                        d = pt_geom.distance(nr)
+                        # Only fallback if extremely close, indicating it might be a corner
+                        if d < 1.0 and d < min_d:
+                            min_d = d
+                            best_pt = nr.asPoint()
+
             # Only record if it's within the outlier limit to prevent 'jumping'
             if best_pt and min_d < outlier_limit:
                 distances.append(min_d)
-                # Create vector for visualization
+                # IMPORTANT: Always append together to keep indices sync
                 vec = QgsGeometry.fromPolylineXY([pt, best_pt])
                 sample_vectors.append(vec)
         
