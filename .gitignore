@@ -1,0 +1,19 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# QGIS/Project files
+*.zip
+*.qgs~
+*.qgz~
+
+# Local environment
+.venv/
+env/
+venv/
+.env

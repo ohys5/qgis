@@ -1,0 +1,8 @@
+[general]
+name=Cadastral Auditor
+qgisMinimumVersion=3.0
+description=Advanced tool for auditing and matching cadastral features with surveyed lines.
+version=2.0
+author=Assistant
+email=assistant@example.com
+about=This plugin checks conformance between surveyed features and cadastral maps, offering precision shifts and gap analysis.
