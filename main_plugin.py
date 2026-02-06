@@ -145,21 +145,38 @@ class CadastralAuditor:
             best_match_feat = None
             min_dist = float('inf')
             
-            # Filter 2: Collect ALL Candidates in range (1:N)
-            candidate_feats = []
+            # Filter 2: Select Best "Shape-Matched" Candidate (Hausdorff Distance)
+            # REQ-2026-02-06: Use Hausdorff distance to find the most similar shape
+            # instead of just the nearest point. This prevents jumping to perpendicular neighbors.
+            
+            best_candidate = None
+            min_hausdorff = float('inf')
+            
+            # Pre-filter candidates within a reasonable range (e.g. 2x limit) to reduce cost
+            potential_candidates = []
             for cid in candidate_ids:
                 cad_feat = cad_layer.getFeature(cid)
                 cad_geom = cad_feat.geometry()
                 
-                dist = search_geom.distance(cad_geom)
-                if dist <= exclusion_limit:
-                    candidate_feats.append(cad_feat)
+                # Loose distance check first
+                if search_geom.distance(cad_geom) <= exclusion_limit * 2.0:
+                    potential_candidates.append(cad_feat)
             
-            if candidate_feats:
-                # Execute Analysis with Multi-Context
+            # Find the single best candidate based on Hausdorff Distance
+            for cad_feat in potential_candidates:
+                cad_geom = cad_feat.geometry()
+                h_dist = search_geom.hausdorffDistance(cad_geom)
+                
+                if h_dist < min_hausdorff:
+                    min_hausdorff = h_dist
+                    best_candidate = cad_feat
+            
+            if best_candidate and min_hausdorff < exclusion_limit * 5.0: # Sanity check
+                # Execute Analysis with the LOCKED Best Candidate
+                # Pass as a list because process_multi_context expects a list
                 result = matcher.process_multi_context(
                     cur_feat, 
-                    candidate_feats, 
+                    [best_candidate], 
                     transform=xform,
                     tolerance=tol_min
                 )

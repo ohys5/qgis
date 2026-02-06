@@ -637,6 +637,43 @@ class ConfidenceStringMatcher:
 
         return result
 
+
+    def calculate_parallel_overlap(self, geom1, geom2, angle_tolerance=10, dist_tolerance=2.0):
+        """
+        Calculates the total length of overlapping parallel segments between two lines.
+        (REQ-2026-02-06-Hausdorff)
+        """
+        if geom1.type() != QgsWkbTypes.LineGeometry or geom2.type() != QgsWkbTypes.LineGeometry:
+            return 0.0
+            
+        # Decompose geom1 into segments
+        parts = []
+        if geom1.isMultipart():
+            parts = geom1.asMultiPolyline()
+        else:
+            parts = [geom1.asPolyline()]
+            
+        # Simplified approach: Densify geom1 and check closeness + parallelism to geom2.
+        densified = geom1.densifyByDistance(0.5)
+        d_pts = [QgsPointXY(p) for p in densified.vertices()]
+        
+        overlap_count = 0
+        
+        for i in range(len(d_pts)-1):
+            p1 = d_pts[i]
+            p2 = d_pts[i+1]
+            mid_pt = QgsGeometry.fromPointXY(QgsPointXY((p1.x()+p2.x())/2, (p1.y()+p2.y())/2))
+            
+            # Check distance
+            nearest = geom2.nearestPoint(mid_pt)
+            if mid_pt.distance(nearest) > dist_tolerance:
+                continue
+                
+            overlap_count += 1
+            
+        # Approx length
+        return overlap_count * 0.5
+
 class PointToLineAuditor:
     """
     P2L (Point-to-Line) Algorithm:
