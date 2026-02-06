@@ -466,8 +466,9 @@ class ConfidenceStringMatcher:
                     nr = seg_geom.nearestPoint(pt_geom)
                     if not nr.isEmpty():
                         d = pt_geom.distance(nr)
-                        # Only fallback if extremely close, indicating it might be a corner
-                        if d < 1.0 and d < min_d:
+                        # Only fallback if reasonably close (e.g. 5m) to catch corners where angles deviate,
+                        # but avoiding jumping to distant lines.
+                        if d < 5.0 and d < min_d:
                             min_d = d
                             best_pt = nr.asPoint()
 
