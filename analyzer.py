@@ -417,6 +417,10 @@ class ConfidenceStringMatcher:
             best_pt = None
             min_d = float('inf')
             
+            # REQ-2026-02-06-FILT: Prevention of 'jumping' points
+            # We only care about points within a reasonable vicinity (e.g., 10m)
+            outlier_limit = 10.0 
+            
             for line in comparison_lines:
                 nr = line.nearestPoint(pt_geom)
                 if not nr.isEmpty():
@@ -425,7 +429,8 @@ class ConfidenceStringMatcher:
                         min_d = d
                         best_pt = nr.asPoint()
             
-            if best_pt:
+            # Only record if it's within the outlier limit to prevent 'jumping'
+            if best_pt and min_d < outlier_limit:
                 distances.append(min_d)
                 # Create vector for visualization
                 vec = QgsGeometry.fromPolylineXY([pt, best_pt])
