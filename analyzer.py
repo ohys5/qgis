@@ -393,24 +393,18 @@ class ConfidenceStringMatcher:
         interval = 1.0
         densified_geom = geom_curr.densifyByDistance(interval)
         
-        # Use boundary for distance calculation to handle 'inside' cases
-        # Use a more compatible way since some PyQGIS versions lack .boundary() on QgsGeometry directly
-        comparison_geom = geom_cad
+        # Prepare comparison lines (Rings) from Cadastral geometry
+        comparison_lines = []
         if geom_cad.type() == QgsWkbTypes.PolygonGeometry:
-            try:
-                comparison_geom = geom_cad.boundary()
-            except (AttributeError, Exception):
-                # Manual extraction of rings if boundary() is missing
-                lines = []
-                if geom_cad.isMultipart():
-                    for poly in geom_cad.asMultiPolygon():
-                        for ring in poly:
-                            lines.append(QgsGeometry.fromPolylineXY(ring))
-                else:
-                    for ring in geom_cad.asPolygon():
-                        lines.append(QgsGeometry.fromPolylineXY(ring))
-                if lines:
-                    comparison_geom = QgsGeometry.collect(lines)
+            if geom_cad.isMultipart():
+                for poly in geom_cad.asMultiPolygon():
+                    for ring in poly:
+                        comparison_lines.append(QgsGeometry.fromPolylineXY(ring))
+            else:
+                for ring in geom_cad.asPolygon():
+                    comparison_lines.append(QgsGeometry.fromPolylineXY(ring))
+        else:
+            comparison_lines.append(geom_cad)
             
         sample_vectors = []
         distances = []
@@ -419,14 +413,22 @@ class ConfidenceStringMatcher:
             pt = QgsPointXY(v.x(), v.y())
             pt_geom = QgsGeometry.fromPointXY(pt)
             
-            # Find closest point on the line/boundary
-            nearest_res = comparison_geom.nearestPoint(pt_geom)
-            if not nearest_res.isEmpty():
-                dist = pt_geom.distance(nearest_res)
-                distances.append(dist)
-                
-                # IMPORTANT: Always append together to keep indices sync
-                vec = QgsGeometry.fromPolylineXY([pt, nearest_res.asPoint()])
+            # Find closest point across ALL rings/lines
+            best_pt = None
+            min_d = float('inf')
+            
+            for line in comparison_lines:
+                nr = line.nearestPoint(pt_geom)
+                if not nr.isEmpty():
+                    d = pt_geom.distance(nr)
+                    if d < min_d:
+                        min_d = d
+                        best_pt = nr.asPoint()
+            
+            if best_pt:
+                distances.append(min_d)
+                # Create vector for visualization
+                vec = QgsGeometry.fromPolylineXY([pt, best_pt])
                 sample_vectors.append(vec)
         
         if distances:
