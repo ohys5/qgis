@@ -393,10 +393,24 @@ class ConfidenceStringMatcher:
         interval = 1.0
         densified_geom = geom_curr.densifyByDistance(interval)
         
-        # Use boundary for distance calculation if it's a polygon to handle 'inside' cases
+        # Use boundary for distance calculation to handle 'inside' cases
+        # Use a more compatible way since some PyQGIS versions lack .boundary() on QgsGeometry directly
         comparison_geom = geom_cad
         if geom_cad.type() == QgsWkbTypes.PolygonGeometry:
-            comparison_geom = geom_cad.boundary()
+            try:
+                comparison_geom = geom_cad.boundary()
+            except (AttributeError, Exception):
+                # Manual extraction of rings if boundary() is missing
+                lines = []
+                if geom_cad.isMultipart():
+                    for poly in geom_cad.asMultiPolygon():
+                        for ring in poly:
+                            lines.append(QgsGeometry.fromPolylineXY(ring))
+                else:
+                    for ring in geom_cad.asPolygon():
+                        lines.append(QgsGeometry.fromPolylineXY(ring))
+                if lines:
+                    comparison_geom = QgsGeometry.collect(lines)
             
         sample_vectors = []
         distances = []
@@ -411,7 +425,7 @@ class ConfidenceStringMatcher:
                 dist = pt_geom.distance(nearest_res)
                 distances.append(dist)
                 
-                # Create vector for visualization
+                # IMPORTANT: Always append together to keep indices sync
                 vec = QgsGeometry.fromPolylineXY([pt, nearest_res.asPoint()])
                 sample_vectors.append(vec)
         
@@ -426,8 +440,10 @@ class ConfidenceStringMatcher:
             # Store all vectors as a MultiLineString for visualization
             result["error_vectors"] = QgsGeometry.fromMultiPolylineXY([v.asPolyline() for v in sample_vectors])
             # Correctly map max distance to its specific vector
-            max_idx = distances.index(max_dist)
-            result["error_line"] = sample_vectors[max_idx]
+            if distances:
+                max_idx = distances.index(max(distances))
+                if max_idx < len(sample_vectors):
+                    result["error_line"] = sample_vectors[max_idx]
         
         result["score"] = avg_dist
         
