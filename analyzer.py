@@ -446,31 +446,46 @@ class ConfidenceStringMatcher:
             best_pt = None
             min_d = float('inf')
             
-            angle_tolerance = 25.0 # Allow 25 degree deviation
+            angle_tolerance = 45.0 # Increased tolerance to catch more 'roughly parallel' lines
             outlier_limit = 10.0 
             
-            # First pass: Look for aligned segments
-            for seg_geom, seg_angle in cad_segments:
-                if self._angle_diff(s_angle, seg_angle) < angle_tolerance:
-                    nr = seg_geom.nearestPoint(pt_geom)
-                    if not nr.isEmpty():
-                        d = pt_geom.distance(nr)
-                        if d < min_d:
-                            min_d = d
-                            best_pt = nr.asPoint()
+            # Prioritized Search:
+            # 1. Look for 'aligned' segments within outlier limits
+            # 2. If none, look for 'any' segment within outlier limits (Fallback)
             
-            # Second pass fallback: If no aligned segment nearby, try absolute nearest but strictly
-            # (Matches user's suggestion to 'track' nearby lines by angle)
-            if not best_pt:
-                for seg_geom, seg_angle in cad_segments:
-                    nr = seg_geom.nearestPoint(pt_geom)
-                    if not nr.isEmpty():
-                        d = pt_geom.distance(nr)
-                        # Only fallback if reasonably close (e.g. 5m) to catch corners where angles deviate,
-                        # but avoiding jumping to distant lines.
-                        if d < 5.0 and d < min_d:
-                            min_d = d
-                            best_pt = nr.asPoint()
+            candidate_aligned = None
+            min_d_aligned = float('inf')
+            
+            candidate_any = None
+            min_d_any = float('inf')
+            
+            for seg_geom, seg_angle in cad_segments:
+                nr = seg_geom.nearestPoint(pt_geom)
+                if not nr.isEmpty():
+                    d = pt_geom.distance(nr)
+                    
+                    # Track absolute nearest (fallback candidate)
+                    if d < min_d_any:
+                        min_d_any = d
+                        candidate_any = nr.asPoint()
+                    
+                    # Track aligned nearest (primary candidate)
+                    if self._angle_diff(s_angle, seg_angle) < angle_tolerance:
+                        if d < min_d_aligned:
+                            min_d_aligned = d
+                            candidate_aligned = nr.asPoint()
+
+            # Decision Logic:
+            # Prefer aligned candidate if it exists and is within rational distance
+            # Otherwise use the absolute nearest candidate (e.g. at corners)
+            
+            if candidate_aligned and min_d_aligned < outlier_limit:
+                best_pt = candidate_aligned
+                min_d = min_d_aligned
+            elif candidate_any and min_d_any < outlier_limit:
+                 # Fallback: Angles didn't match, but this point is close enough to be considered
+                best_pt = candidate_any
+                min_d = min_d_any
 
             # Only record if it's within the outlier limit to prevent 'jumping'
             if best_pt and min_d < outlier_limit:
