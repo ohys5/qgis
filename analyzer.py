@@ -419,8 +419,8 @@ class ConfidenceStringMatcher:
         # Prepare comparison segments and their angles
         cad_segments = []
         for line_geom in comparison_lines:
-            # Extract vertices to build segments
-            pts = [v for v in line_geom.vertices()]
+            # Extract vertices to build segments (convert QgsPoint to QgsPointXY)
+            pts = [QgsPointXY(v.x(), v.y()) for v in line_geom.vertices()]
             for j in range(len(pts) - 1):
                 seg = QgsGeometry.fromPolylineXY([pts[j], pts[j+1]])
                 angle = self._get_bearing(pts[j], pts[j+1])
