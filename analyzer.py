@@ -512,34 +512,129 @@ class ConfidenceStringMatcher:
         
         result["score"] = avg_dist
         
-        if max_dist <= tolerance:
-             result.update({
-                "status": "부합",
-                "reliability": "높음",
-                "nd_cost": 0.0
-            })
-        elif overlap_ratio >= 0.95:
-             result.update({
-                "status": "부합 (Buffer)",
-                "reliability": "보통"
-            })
-             
-        # 4. Grid Search (Precision Mode Only)
-        if mode == "precision" and result["status"] == "불부합":
-            solver = GridSearchSolver(geom_curr, geom_cad, tolerance)
-            bdx, bdy, max_score = solver.solve()
-            
-            result["shift_dx"] = bdx
-            result["shift_dy"] = bdy
-            
-            if max_score >= 0.80:
-                result.update({
-                    "status": "위치정정 필요",
-                    "rec_shift": "이동 권장",
-                    "reliability": "높음" if max_score > 0.9 else "보통",
-                    "nd_cost": 1.0 - max_score
-                })
+        return result
         
+    def process_multi_context(self, cur_feat, cad_feats, transform=None, tolerance=0.1):
+        """
+        1:N Context-Aware Matching (REQ-2026-02-06-TaskOrder).
+        Matches current feature against multiple cadastral candidates using strict angle verification.
+        """
+        geom_curr = cur_feat.geometry()
+        
+        # Transform current geometry if needed
+        if transform:
+            geom_curr.transform(transform)
+
+        # 1. Preprocess: Decompose ALL candidates into segments with angles
+        target_segments = []
+        for cf in cad_feats:
+            c_geom = cf.geometry()
+            # Handle Multi-parts and Polygons
+            parts = []
+            if c_geom.isMultipart():
+                if c_geom.type() == QgsWkbTypes.PolygonGeometry:
+                    for poly in c_geom.asMultiPolygon():
+                        parts.extend([QgsGeometry.fromPolylineXY(ring) for ring in poly])
+                else:
+                    parts = c_geom.asMultiPolyline() # returns list of list of points? No, usually not geometry objects.
+                    # PyQGIS asMultiPolyline returns [[pt, pt], [pt, pt]]
+                    # We need QgsGeometry for easy vertex iteration or just iterate points
+                    # Let's standardize on QgsGeometry for consistency with previous logic
+                    temp_parts = c_geom.asMultiPolyline()
+                    parts.extend([QgsGeometry.fromPolylineXY(p) for p in temp_parts])
+            else:
+                if c_geom.type() == QgsWkbTypes.PolygonGeometry:
+                    for ring in c_geom.asPolygon():
+                        parts.append(QgsGeometry.fromPolylineXY(ring))
+                else:
+                    parts.append(c_geom)
+
+            # Build Segments
+            for part_geom in parts:
+                pts = [QgsPointXY(v.x(), v.y()) for v in part_geom.vertices()]
+                for j in range(len(pts) - 1):
+                    seg = QgsGeometry.fromPolylineXY([pts[j], pts[j+1]])
+                    angle = self._get_bearing(pts[j], pts[j+1])
+                    target_segments.append({'geom': seg, 'angle': angle})
+
+        # 2. Interval Sampling & Matching
+        interval = 1.0
+        densified = geom_curr.densifyByDistance(interval)
+        survey_pts = [QgsPointXY(v.x(), v.y()) for v in densified.vertices()]
+        
+        distances = []
+        sample_vectors = []
+        outlier_limit = 10.0
+        angle_threshold = 30.0 # Strict parallel check
+
+        for i, pt in enumerate(survey_pts):
+            pt_geom = QgsGeometry.fromPointXY(pt)
+            
+            # Calculate Local Survey Angle
+            # Use centered difference if possible, else forward/backward
+            if i < len(survey_pts) - 1:
+                s_angle = self._get_bearing(pt, survey_pts[i+1])
+            elif i > 0:
+                s_angle = self._get_bearing(survey_pts[i-1], pt)
+            else:
+                s_angle = 0
+            
+            # 3. Find Best Match among FILTERED segments
+            best_pt = None
+            min_d = float('inf')
+            
+            # Filter first by ANGLE
+            candidates = []
+            for seg in target_segments:
+                diff = self._angle_diff(s_angle, seg['angle'])
+                if diff <= angle_threshold:
+                    candidates.append(seg['geom'])
+            
+            # Search nearest among candidates
+            for cand_geom in candidates:
+                nr = cand_geom.nearestPoint(pt_geom)
+                if not nr.isEmpty():
+                    d = nr.distance(pt_geom)
+                    if d < min_d:
+                        min_d = d
+                        best_pt = nr.asPoint()
+            
+            # Valid Match Found?
+            if best_pt and min_d < outlier_limit:
+                distances.append(min_d)
+                sample_vectors.append(QgsGeometry.fromPolylineXY([pt, best_pt]))
+        
+        # 4. Result Formatting
+        if not distances:
+            return {
+                "status": "분석불가", "score": 999, "nd_cost": 1.0, 
+                "reliability": "없음", "note": "매칭된 선분 없음"
+            }
+
+        avg_dist = sum(distances) / len(distances)
+        max_dist = max(distances)
+        
+        result = {
+            "status": "판단중",
+            "score": avg_dist,
+            "nd_cost": 0.0 if avg_dist < tolerance else 1.0, # Simplistic cost
+            "reliability": "보통",
+            "rec_shift": "-" 
+        }
+
+        # Status Logic
+        if max_dist <= tolerance:
+            result["status"] = "부합"
+            result["reliability"] = "높음"
+        else:
+            result["status"] = "불부합"
+        
+        # Vectors
+        if sample_vectors:
+            result["error_vectors"] = QgsGeometry.fromMultiPolylineXY([v.asPolyline() for v in sample_vectors])
+            max_idx = distances.index(max_dist)
+            result["error_line"] = sample_vectors[max_idx]
+
         return result
 
 class PointToLineAuditor:

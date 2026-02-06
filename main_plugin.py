@@ -145,34 +145,21 @@ class CadastralAuditor:
             best_match_feat = None
             min_dist = float('inf')
             
-            # Filter 2: Best Candidate Selection
+            # Filter 2: Collect ALL Candidates in range (1:N)
+            candidate_feats = []
             for cid in candidate_ids:
                 cad_feat = cad_layer.getFeature(cid)
                 cad_geom = cad_feat.geometry()
                 
                 dist = search_geom.distance(cad_geom)
-                if dist > exclusion_limit:
-                    continue
-                
-                # Filter 3: Angle Check (Skip if perpendicular > 45 deg)
-                if not self._check_angle_alignment(search_geom, cad_geom):
-                    continue
-                    
-                if dist < min_dist:
-                    min_dist = dist
-                    best_match_feat = cad_feat
+                if dist <= exclusion_limit:
+                    candidate_feats.append(cad_feat)
             
-            if best_match_feat:
-                # Execute Analysis
-                # Pass transformed geometry if needed, or handle inside?
-                # The matcher handles geometry from features, so we should pass features.
-                # However, if we transformed `search_geom` already, we should probably pass that or let matcher handle transform.
-                # To follow strict "clean code", let's pass the features and the transform object to the matcher.
-                
-                result = matcher.process_pair(
+            if candidate_feats:
+                # Execute Analysis with Multi-Context
+                result = matcher.process_multi_context(
                     cur_feat, 
-                    best_match_feat, 
-                    mode="precision" if is_precision else "simple",
+                    candidate_feats, 
                     transform=xform,
                     tolerance=tol_min
                 )
@@ -201,32 +188,6 @@ class CadastralAuditor:
         feat.setGeometry(geom)
         feat.setAttributes([fid, status])
         self.vector_layer.dataProvider().addFeatures([feat])
-                
-    def _check_angle_alignment(self, g1, g2):
-        # Simply check if main angles are within 45 degrees
-        # This is a heuristic; effective for line strings
-        if g1.type() != QgsWkbTypes.LineGeometry or g2.type() != QgsWkbTypes.LineGeometry:
-            return True # Pass polygons or mixed types
-            
-        def get_angle(geom):
-            # Simplistic start-to-end angle
-            if geom.isMultipart():
-                lines = geom.asMultiPolyline()
-                if not lines: return 0
-                line = lines[0] # Use first part
-            else:
-                line = geom.asPolyline()
-            
-            if len(line) < 2: return 0
-            dx = line[-1].x() - line[0].x()
-            dy = line[-1].y() - line[0].y()
-            return math.degrees(math.atan2(dy, dx))
-            
-        a1 = get_angle(g1)
-        a2 = get_angle(g2)
-        diff = abs(a1 - a2)
-        if diff > 180: diff = 360 - diff
-        return diff <= 45 # Pass if parallel-ish
         
     def _add_result_row(self, row, fid, res):
         self.dlg.table_results.insertRow(row)
